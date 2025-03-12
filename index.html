@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Website Crawler</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .container {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        #urlInput {
+            width: 70%;
+            padding: 10px;
+            margin-right: 10px;
+        }
+        button {
+            padding: 10px 15px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #results {
+            margin-top: 20px;
+            white-space: pre-wrap;
+            max-height: 500px;
+            overflow-y: auto;
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 4px;
+        }
+        .status {
+            margin: 15px 0;
+            font-style: italic;
+        }
+        #downloadBtn {
+            display: none;
+            margin-top: 15px;
+        }
+        .error {
+            color: red;
+        }
+    </style>
+</head>
+<body>
+    <h1>Website Crawler</h1>
+    <p>Enter a website URL to crawl all pages and extract text and links</p>
+    
+    <div class="container">
+        <input type="text" id="urlInput" placeholder="Enter website URL (e.g., https://example.com)" />
+        <button id="crawlBtn">Crawl Website</button>
+        <div class="status" id="status"></div>
+        <label><input type="checkbox" id="corsProxyCheck" checked> Use CORS proxy (for cross-origin sites)</label>
+    </div>
+    
+    <div class="container">
+        <h2>Results</h2>
+        <div id="results">Results will appear here...</div>
+        <button id="downloadBtn">Download Results</button>
+    </div>
+
+    <script>
+        const urlInput = document.getElementById('urlInput');
+        const crawlBtn = document.getElementById('crawlBtn');
+        const statusDiv = document.getElementById('status');
+        const resultsDiv = document.getElementById('results');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const corsProxyCheck = document.getElementById('corsProxyCheck');
+
+        // Store visited URLs to avoid duplicate crawling
+        let visitedUrls = new Set();
+        let crawlResults = [];
+        let baseUrl = '';
+        let isRunning = false;
+
+        // Create CORS proxy URL
+        function createProxyUrl(url) {
+            if (corsProxyCheck.checked) {
+                return `https://corsproxy.io/?${encodeURIComponent(url)}`;
+            }
+            return url;
+        }
+
+        // Normalize URL
+        function normalizeUrl(url) {
+            try {
+                // Handle relative URLs
+                if (url.startsWith('/')) {
+                    return new URL(url, baseUrl).href;
+                }
+                
+                // Handle URLs without protocol
+                if (!url.startsWith('http')) {
+                    return new URL(`http://${url}`).href;
+                }
+                
+                return new URL(url).href;
+            } catch (e) {
+                console.error("URL normalization error:", e);
+                return null;
+            }
+        }
+
+        // Check if URL belongs to the same domain
+        function isSameDomain(url) {
+            try {
+                const urlObj = new URL(url);
+                const baseUrlObj = new URL(baseUrl);
+                return urlObj.hostname === baseUrlObj.hostname;
+            } catch (e) {
+                return false;
+            }
+        }
+
+        // Extract links from HTML content
+        function extractLinks(html, currentUrl) {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const links = Array.from(doc.querySelectorAll('a'));
+            
+            return links
+                .map(link => {
+                    const href = link.getAttribute('href');
+                    if (!href) return null;
+                    
+                    // Skip anchor links, javascript, mailto, etc.
+                    if (href.startsWith('#') || href.startsWith('javascript:') || 
+                        href.startsWith('mailto:') || href.startsWith('tel:')) {
+                        return null;
+                    }
+                    
+                    // Normalize URL
+                    return normalizeUrl(href);
+                })
+                .filter(url => url && isSameDomain(url) && !visitedUrls.has(url));
+        }
+
+        // Extract text content from HTML
+        function extractText(html) {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            
+            // Remove script and style elements
+            const scripts = doc.querySelectorAll('script, style, noscript, iframe');
+            scripts.forEach(script => script.remove());
+            
+            // Get text from body
+            return doc.body.textContent
+                .replace(/\s+/g, ' ')
+                .trim();
+        }
+
+        // Crawl a single URL
+        async function crawlUrl(url) {
+            if (visitedUrls.has(url)) return [];
+            
+            visitedUrls.add(url);
+            statusDiv.textContent = `Crawling: ${url}`;
+            
+            try {
+                const response = await fetch(createProxyUrl(url));
+                if (!response.ok) {
+                    return [];
+                }
+                
+                const html = await response.text();
+                const text = extractText(html);
+                const links = extractLinks(html, url);
+                
+                const pageData = {
+                    url,
+                    text: text.substring(0, 5000) + (text.length > 5000 ? '... (truncated)' : ''),
+                    links: links
+                };
+                
+                crawlResults.push(pageData);
+                return links;
+            } catch (error) {
+                console.error(`Error crawling ${url}:`, error);
+                return [];
+            }
+        }
+
+        // Main crawling function with depth limit
+        async function crawlWebsite(startUrl, maxDepth = 2) {
+            baseUrl = normalizeUrl(startUrl);
+            if (!baseUrl) {
+                statusDiv.innerHTML = '<span class="error">Invalid URL. Please enter a valid URL.</span>';
+                return;
+            }
+            
+            visitedUrls.clear();
+            crawlResults = [];
+            resultsDiv.textContent = 'Crawling in progress...';
+            
+            // Initialize queue with the start URL and depth 0
+            let queue = [{ url: baseUrl, depth: 0 }];
+            
+            try {
+                while (queue.length > 0 && isRunning) {
+                    const { url, depth } = queue.shift();
+                    
+                    // Skip if we've reached max depth
+                    if (depth > maxDepth) continue;
+                    
+                    // Crawl the current URL
+                    const newLinks = await crawlUrl(url);
+                    
+                    // Add new links to the queue with incremented depth
+                    if (depth < maxDepth) {
+                        queue = queue.concat(newLinks.map(link => ({ url: link, depth: depth + 1 })));
+                    }
+                    
+                    // Update results while crawling
+                    updateResults();
+                    
+                    // Add a small delay to be kind to servers
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+                
+                if (isRunning) {
+                    statusDiv.textContent = `Crawling completed. Found ${crawlResults.length} pages.`;
+                } else {
+                    statusDiv.textContent = "Crawling stopped by user.";
+                }
+                
+                updateResults();
+                downloadBtn.style.display = 'inline-block';
+                
+            } catch (error) {
+                statusDiv.innerHTML = `<span class="error">Error: ${error.message}</span>`;
+                console.error('Crawling error:', error);
+            } finally {
+                isRunning = false;
+                crawlBtn.textContent = 'Crawl Website';
+            }
+        }
+
+        // Format and display results
+        function updateResults() {
+            if (crawlResults.length === 0) {
+                resultsDiv.textContent = 'No results yet...';
+                return;
+            }
+            
+            let formattedResults = '';
+            
+            crawlResults.forEach((page, index) => {
+                formattedResults += `--- PAGE ${index + 1}: ${page.url} ---\n\n`;
+                formattedResults += `TEXT:\n${page.text}\n\n`;
+                formattedResults += `LINKS (${page.links.length}):\n`;
+                page.links.forEach(link => {
+                    formattedResults += `- ${link}\n`;
+                });
+                formattedResults += '\n--------------------------------------\n\n';
+            });
+            
+            resultsDiv.textContent = formattedResults;
+        }
+
+        // Download results as a text file
+        function downloadResults() {
+            if (crawlResults.length === 0) return;
+            
+            let formattedResults = '';
+            
+            crawlResults.forEach((page, index) => {
+                formattedResults += `--- PAGE ${index + 1}: ${page.url} ---\n\n`;
+                formattedResults += `TEXT:\n${page.text}\n\n`;
+                formattedResults += `LINKS (${page.links.length}):\n`;
+                page.links.forEach(link => {
+                    formattedResults += `- ${link}\n`;
+                });
+                formattedResults += '\n--------------------------------------\n\n';
+            });
+            
+            const blob = new Blob([formattedResults], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            
+            a.href = url;
+            a.download = 'website-crawl-results.txt';
+            a.click();
+            
+            URL.revokeObjectURL(url);
+        }
+
+        // Event listeners
+        crawlBtn.addEventListener('click', () => {
+            if (isRunning) {
+                isRunning = false;
+                crawlBtn.textContent = 'Crawl Website';
+                statusDiv.textContent = 'Stopping...';
+            } else {
+                const url = urlInput.value.trim();
+                if (!url) {
+                    statusDiv.innerHTML = '<span class="error">Please enter a URL</span>';
+                    return;
+                }
+                
+                isRunning = true;
+                crawlBtn.textContent = 'Stop Crawling';
+                downloadBtn.style.display = 'none';
+                crawlWebsite(url, 2);
+            }
+        });
+
+        downloadBtn.addEventListener('click', downloadResults);
+    </script>
+</body>
+</html>
