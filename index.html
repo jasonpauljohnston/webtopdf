@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Website Crawler</title>
+    <title>Website Crawler with Enhanced Debugging</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -38,7 +38,7 @@
             background-color: #cccccc;
             cursor: not-allowed;
         }
-        #results {
+        #results, #debugLog {
             margin-top: 20px;
             white-space: pre-wrap;
             max-height: 500px;
@@ -57,24 +57,92 @@
         }
         .error {
             color: red;
+            font-weight: bold;
+        }
+        .warning {
+            color: orange;
+        }
+        .success {
+            color: green;
+        }
+        .tabs {
+            display: flex;
+            margin-bottom: 10px;
+        }
+        .tab {
+            padding: 10px 15px;
+            cursor: pointer;
+            border: 1px solid #ddd;
+            background-color: #f1f1f1;
+            margin-right: 5px;
+            border-radius: 4px 4px 0 0;
+        }
+        .tab.active {
+            background-color: #fff;
+            border-bottom-color: #fff;
+        }
+        .tabContent {
+            display: none;
+        }
+        .tabContent.active {
+            display: block;
+        }
+        .corsTest {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border-radius: 4px;
         }
     </style>
 </head>
 <body>
-    <h1>Website Crawler</h1>
+    <h1>Website Crawler with Enhanced Debugging</h1>
     <p>Enter a website URL to crawl all pages and extract text and links</p>
     
     <div class="container">
         <input type="text" id="urlInput" placeholder="Enter website URL (e.g., https://example.com)" />
         <button id="crawlBtn">Crawl Website</button>
         <div class="status" id="status"></div>
-        <label><input type="checkbox" id="corsProxyCheck" checked> Use CORS proxy (for cross-origin sites)</label>
+        
+        <div class="corsTest">
+            <h3>CORS Testing</h3>
+            <label><input type="checkbox" id="corsProxyCheck" checked> Use CORS proxy (for cross-origin sites)</label>
+            <div>
+                <label>Proxy: 
+                <select id="proxySelector">
+                    <option value="corsproxy.io">corsproxy.io</option>
+                    <option value="cors-anywhere">cors-anywhere.herokuapp.com (may require activation)</option>
+                    <option value="allorigins">api.allorigins.win</option>
+                </select>
+                </label>
+                <button id="testCorsBtn">Test CORS</button>
+                <div id="corsTestResult"></div>
+            </div>
+        </div>
+        
+        <div>
+            <h3>Crawler Settings</h3>
+            <label>Max depth: <input type="number" id="maxDepthInput" min="1" max="5" value="2"></label>
+            <label><input type="checkbox" id="verboseCheck" checked> Verbose logging</label>
+        </div>
     </div>
     
     <div class="container">
-        <h2>Results</h2>
-        <div id="results">Results will appear here...</div>
-        <button id="downloadBtn">Download Results</button>
+        <div class="tabs">
+            <div class="tab active" data-tab="results">Results</div>
+            <div class="tab" data-tab="debug">Debug Log</div>
+        </div>
+        
+        <div class="tabContent active" id="resultsTab">
+            <div id="results">Results will appear here...</div>
+            <button id="downloadBtn">Download Results</button>
+        </div>
+        
+        <div class="tabContent" id="debugTab">
+            <div id="debugLog">Debug information will appear here...</div>
+            <button id="clearLogBtn">Clear Log</button>
+            <button id="downloadLogBtn">Download Log</button>
+        </div>
     </div>
 
     <script>
@@ -82,21 +150,93 @@
         const crawlBtn = document.getElementById('crawlBtn');
         const statusDiv = document.getElementById('status');
         const resultsDiv = document.getElementById('results');
+        const debugLogDiv = document.getElementById('debugLog');
         const downloadBtn = document.getElementById('downloadBtn');
         const corsProxyCheck = document.getElementById('corsProxyCheck');
+        const proxySelector = document.getElementById('proxySelector');
+        const testCorsBtn = document.getElementById('testCorsBtn');
+        const corsTestResult = document.getElementById('corsTestResult');
+        const maxDepthInput = document.getElementById('maxDepthInput');
+        const verboseCheck = document.getElementById('verboseCheck');
+        const clearLogBtn = document.getElementById('clearLogBtn');
+        const downloadLogBtn = document.getElementById('downloadLogBtn');
+        const tabs = document.querySelectorAll('.tab');
+        const tabContents = document.querySelectorAll('.tabContent');
 
         // Store visited URLs to avoid duplicate crawling
         let visitedUrls = new Set();
         let crawlResults = [];
         let baseUrl = '';
         let isRunning = false;
+        let debugLog = [];
 
-        // Create CORS proxy URL
-        function createProxyUrl(url) {
-            if (corsProxyCheck.checked) {
-                return `https://corsproxy.io/?${encodeURIComponent(url)}`;
+        // Tab functionality
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                const tabName = tab.getAttribute('data-tab');
+                
+                // Update active tab
+                tabs.forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                
+                // Show corresponding content
+                tabContents.forEach(content => {
+                    content.classList.remove('active');
+                    if (content.id === `${tabName}Tab`) {
+                        content.classList.add('active');
+                    }
+                });
+            });
+        });
+
+        // Debug logging function
+        function logDebug(message, type = 'info') {
+            const timestamp = new Date().toISOString();
+            const logEntry = {
+                timestamp,
+                message,
+                type
+            };
+            
+            debugLog.push(logEntry);
+            
+            // Update the debug log display if verbose is enabled
+            if (verboseCheck.checked || type === 'error' || type === 'warning') {
+                const logClass = type === 'error' ? 'error' : 
+                                type === 'warning' ? 'warning' : 
+                                type === 'success' ? 'success' : '';
+                
+                debugLogDiv.innerHTML += `<div class="${logClass}">[${timestamp}] ${message}</div>`;
+                debugLogDiv.scrollTop = debugLogDiv.scrollHeight;
             }
-            return url;
+        }
+
+        // Create CORS proxy URL based on selected proxy
+        function createProxyUrl(url) {
+            if (!corsProxyCheck.checked) {
+                logDebug(`Direct request (no proxy) to: ${url}`);
+                return url;
+            }
+            
+            const proxy = proxySelector.value;
+            let proxyUrl;
+            
+            switch(proxy) {
+                case 'corsproxy.io':
+                    proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+                    break;
+                case 'cors-anywhere':
+                    proxyUrl = `https://cors-anywhere.herokuapp.com/${url}`;
+                    break;
+                case 'allorigins':
+                    proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+                    break;
+                default:
+                    proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+            }
+            
+            logDebug(`Using proxy: ${proxy} for URL: ${url}`);
+            return proxyUrl;
         }
 
         // Normalize URL
@@ -104,17 +244,26 @@
             try {
                 // Handle relative URLs
                 if (url.startsWith('/')) {
-                    return new URL(url, baseUrl).href;
+                    const normalized = new URL(url, baseUrl).href;
+                    logDebug(`Normalized relative URL: ${url} → ${normalized}`);
+                    return normalized;
                 }
                 
                 // Handle URLs without protocol
                 if (!url.startsWith('http')) {
-                    return new URL(`http://${url}`).href;
+                    if (url.startsWith('www.')) {
+                        const normalized = new URL(`https://${url}`).href;
+                        logDebug(`Added protocol to URL: ${url} → ${normalized}`);
+                        return normalized;
+                    } else {
+                        logDebug(`Invalid URL format: ${url}`, 'warning');
+                        return null;
+                    }
                 }
                 
                 return new URL(url).href;
             } catch (e) {
-                console.error("URL normalization error:", e);
+                logDebug(`URL normalization error for ${url}: ${e.message}`, 'error');
                 return null;
             }
         }
@@ -124,48 +273,120 @@
             try {
                 const urlObj = new URL(url);
                 const baseUrlObj = new URL(baseUrl);
-                return urlObj.hostname === baseUrlObj.hostname;
+                const result = urlObj.hostname === baseUrlObj.hostname;
+                
+                if (!result) {
+                    logDebug(`URL ${url} is on different domain than ${baseUrl}`, 'info');
+                }
+                
+                return result;
             } catch (e) {
+                logDebug(`Domain check error for ${url}: ${e.message}`, 'error');
                 return false;
             }
         }
 
         // Extract links from HTML content
         function extractLinks(html, currentUrl) {
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(html, 'text/html');
-            const links = Array.from(doc.querySelectorAll('a'));
-            
-            return links
-                .map(link => {
-                    const href = link.getAttribute('href');
-                    if (!href) return null;
-                    
-                    // Skip anchor links, javascript, mailto, etc.
-                    if (href.startsWith('#') || href.startsWith('javascript:') || 
-                        href.startsWith('mailto:') || href.startsWith('tel:')) {
-                        return null;
-                    }
-                    
-                    // Normalize URL
-                    return normalizeUrl(href);
-                })
-                .filter(url => url && isSameDomain(url) && !visitedUrls.has(url));
+            try {
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                
+                // Check for parsing errors
+                const parserError = doc.querySelector('parsererror');
+                if (parserError) {
+                    throw new Error('HTML parsing failed');
+                }
+                
+                const links = Array.from(doc.querySelectorAll('a'));
+                logDebug(`Found ${links.length} raw links on page: ${currentUrl}`);
+                
+                const extractedLinks = links
+                    .map(link => {
+                        const href = link.getAttribute('href');
+                        if (!href) return null;
+                        
+                        // Skip anchor links, javascript, mailto, etc.
+                        if (href.startsWith('#') || href.startsWith('javascript:') || 
+                            href.startsWith('mailto:') || href.startsWith('tel:')) {
+                            return null;
+                        }
+                        
+                        // Normalize URL
+                        return normalizeUrl(href);
+                    })
+                    .filter(url => url && isSameDomain(url) && !visitedUrls.has(url));
+                
+                logDebug(`Extracted ${extractedLinks.length} valid links from ${currentUrl}`);
+                return extractedLinks;
+            } catch (error) {
+                logDebug(`Link extraction error on ${currentUrl}: ${error.message}`, 'error');
+                return [];
+            }
         }
 
         // Extract text content from HTML
         function extractText(html) {
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(html, 'text/html');
+            try {
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                
+                // Remove script and style elements
+                const scripts = doc.querySelectorAll('script, style, noscript, iframe');
+                scripts.forEach(script => script.remove());
+                
+                // Get text from body
+                if (!doc.body) {
+                    logDebug("No body element found in parsed HTML", 'warning');
+                    return "";
+                }
+                
+                const text = doc.body.textContent
+                    .replace(/\s+/g, ' ')
+                    .trim();
+                
+                logDebug(`Extracted ${text.length} characters of text`);
+                return text;
+            } catch (error) {
+                logDebug(`Text extraction error: ${error.message}`, 'error');
+                return "";
+            }
+        }
+
+        // Test CORS connectivity
+        async function testCorsConnection() {
+            const testUrl = "https://example.com";
+            corsTestResult.innerHTML = "Testing CORS connection...";
             
-            // Remove script and style elements
-            const scripts = doc.querySelectorAll('script, style, noscript, iframe');
-            scripts.forEach(script => script.remove());
-            
-            // Get text from body
-            return doc.body.textContent
-                .replace(/\s+/g, ' ')
-                .trim();
+            try {
+                const proxyUrl = createProxyUrl(testUrl);
+                logDebug(`Testing CORS with URL: ${proxyUrl}`);
+                
+                const startTime = Date.now();
+                const response = await fetch(proxyUrl);
+                const elapsed = Date.now() - startTime;
+                
+                if (response.ok) {
+                    const html = await response.text();
+                    if (html.length > 0) {
+                        corsTestResult.innerHTML = `<span class="success">✓ CORS is working! Response received in ${elapsed}ms.</span>`;
+                        logDebug(`CORS test successful. Response size: ${html.length} bytes`, 'success');
+                        return true;
+                    } else {
+                        corsTestResult.innerHTML = `<span class="warning">⚠️ Received empty response. Proxy may be partially working.</span>`;
+                        logDebug("CORS test received empty response", 'warning');
+                        return false;
+                    }
+                } else {
+                    corsTestResult.innerHTML = `<span class="error">❌ CORS test failed with status: ${response.status}</span>`;
+                    logDebug(`CORS test failed with status: ${response.status}`, 'error');
+                    return false;
+                }
+            } catch (error) {
+                corsTestResult.innerHTML = `<span class="error">❌ CORS test error: ${error.message}</span>`;
+                logDebug(`CORS test error: ${error.message}`, 'error');
+                return false;
+            }
         }
 
         // Crawl a single URL
@@ -174,14 +395,34 @@
             
             visitedUrls.add(url);
             statusDiv.textContent = `Crawling: ${url}`;
+            logDebug(`Starting to crawl: ${url}`);
             
             try {
-                const response = await fetch(createProxyUrl(url));
+                const proxyUrl = createProxyUrl(url);
+                logDebug(`Fetching URL: ${proxyUrl}`);
+                
+                const response = await fetch(proxyUrl);
                 if (!response.ok) {
+                    logDebug(`HTTP error for ${url}: ${response.status} ${response.statusText}`, 'error');
+                    return [];
+                }
+                
+                const contentType = response.headers.get('content-type') || '';
+                logDebug(`Content-Type: ${contentType}`);
+                
+                if (!contentType.includes('text/html')) {
+                    logDebug(`Skipping non-HTML content: ${contentType}`, 'warning');
                     return [];
                 }
                 
                 const html = await response.text();
+                if (html.length === 0) {
+                    logDebug(`Received empty HTML from ${url}`, 'warning');
+                    return [];
+                }
+                
+                logDebug(`Received ${html.length} bytes from ${url}`);
+                
                 const text = extractText(html);
                 const links = extractLinks(html, url);
                 
@@ -192,8 +433,10 @@
                 };
                 
                 crawlResults.push(pageData);
+                logDebug(`Successfully processed ${url}`, 'success');
                 return links;
             } catch (error) {
+                logDebug(`Error crawling ${url}: ${error.message}`, 'error');
                 console.error(`Error crawling ${url}:`, error);
                 return [];
             }
@@ -201,11 +444,18 @@
 
         // Main crawling function with depth limit
         async function crawlWebsite(startUrl, maxDepth = 2) {
-            baseUrl = normalizeUrl(startUrl);
-            if (!baseUrl) {
+            debugLog = [];
+            logDebug(`Starting crawl of ${startUrl} with max depth ${maxDepth}`);
+            
+            const normalizedUrl = normalizeUrl(startUrl);
+            if (!normalizedUrl) {
                 statusDiv.innerHTML = '<span class="error">Invalid URL. Please enter a valid URL.</span>';
+                logDebug(`Invalid start URL: ${startUrl}`, 'error');
                 return;
             }
+            
+            baseUrl = normalizedUrl;
+            logDebug(`Base URL set to: ${baseUrl}`);
             
             visitedUrls.clear();
             crawlResults = [];
@@ -213,20 +463,33 @@
             
             // Initialize queue with the start URL and depth 0
             let queue = [{ url: baseUrl, depth: 0 }];
+            let processedCount = 0;
             
             try {
+                logDebug(`Testing CORS before starting crawl`);
+                const corsWorks = await testCorsConnection();
+                if (!corsWorks && corsProxyCheck.checked) {
+                    logDebug(`CORS test failed, but continuing with crawl anyway`, 'warning');
+                }
+                
                 while (queue.length > 0 && isRunning) {
                     const { url, depth } = queue.shift();
+                    logDebug(`Processing URL: ${url} (depth: ${depth})`);
                     
                     // Skip if we've reached max depth
-                    if (depth > maxDepth) continue;
+                    if (depth > maxDepth) {
+                        logDebug(`Skipping ${url} - exceeds max depth of ${maxDepth}`);
+                        continue;
+                    }
                     
                     // Crawl the current URL
                     const newLinks = await crawlUrl(url);
+                    processedCount++;
                     
                     // Add new links to the queue with incremented depth
                     if (depth < maxDepth) {
                         queue = queue.concat(newLinks.map(link => ({ url: link, depth: depth + 1 })));
+                        logDebug(`Added ${newLinks.length} new URLs to queue. Queue size now: ${queue.length}`);
                     }
                     
                     // Update results while crawling
@@ -237,8 +500,10 @@
                 }
                 
                 if (isRunning) {
+                    logDebug(`Crawling completed. Processed ${processedCount} URLs, found ${crawlResults.length} valid pages.`, 'success');
                     statusDiv.textContent = `Crawling completed. Found ${crawlResults.length} pages.`;
                 } else {
+                    logDebug(`Crawling stopped by user after processing ${processedCount} URLs.`);
                     statusDiv.textContent = "Crawling stopped by user.";
                 }
                 
@@ -246,6 +511,7 @@
                 downloadBtn.style.display = 'inline-block';
                 
             } catch (error) {
+                logDebug(`Critical crawling error: ${error.message}`, 'error');
                 statusDiv.innerHTML = `<span class="error">Error: ${error.message}</span>`;
                 console.error('Crawling error:', error);
             } finally {
@@ -292,12 +558,31 @@
                 formattedResults += '\n--------------------------------------\n\n';
             });
             
-            const blob = new Blob([formattedResults], { type: 'text/plain' });
+            downloadTextFile(formattedResults, 'website-crawl-results.txt');
+        }
+        
+        // Download debug log as a text file
+        function downloadDebugLog() {
+            if (debugLog.length === 0) return;
+            
+            let formattedLog = 'CRAWLER DEBUG LOG\n' + 
+                              '=================\n\n';
+            
+            debugLog.forEach(entry => {
+                formattedLog += `[${entry.timestamp}] [${entry.type.toUpperCase()}] ${entry.message}\n`;
+            });
+            
+            downloadTextFile(formattedLog, 'crawler-debug-log.txt');
+        }
+        
+        // Generic function to download text as a file
+        function downloadTextFile(content, filename) {
+            const blob = new Blob([content], { type: 'text/plain' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             
             a.href = url;
-            a.download = 'website-crawl-results.txt';
+            a.download = filename;
             a.click();
             
             URL.revokeObjectURL(url);
@@ -309,6 +594,7 @@
                 isRunning = false;
                 crawlBtn.textContent = 'Crawl Website';
                 statusDiv.textContent = 'Stopping...';
+                logDebug('Crawling stopped by user');
             } else {
                 const url = urlInput.value.trim();
                 if (!url) {
@@ -319,11 +605,27 @@
                 isRunning = true;
                 crawlBtn.textContent = 'Stop Crawling';
                 downloadBtn.style.display = 'none';
-                crawlWebsite(url, 2);
+                
+                // Clear logs for new crawl
+                if (!verboseCheck.checked) {
+                    debugLogDiv.innerHTML = '';
+                }
+                
+                const maxDepth = parseInt(maxDepthInput.value) || 2;
+                crawlWebsite(url, maxDepth);
             }
         });
 
+        testCorsBtn.addEventListener('click', testCorsConnection);
         downloadBtn.addEventListener('click', downloadResults);
+        clearLogBtn.addEventListener('click', () => {
+            debugLogDiv.innerHTML = '';
+            debugLog = [];
+        });
+        downloadLogBtn.addEventListener('click', downloadDebugLog);
+        
+        // Initialize with test
+        logDebug('Web Crawler initialized', 'info');
     </script>
 </body>
 </html>
